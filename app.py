@@ -1,13 +1,6 @@
 import sys
-print(f"Python version: {sys.version}")
-print(f"Python path: {sys.path}")
-
 import numpy as np
-print(f"NumPy version: {np.__version__}")
-
 import pandas as pd
-print(f"Pandas version: {pd.__version__}")
-
 import dash
 from dash import Dash, dcc, html, Input, Output, State, dash_table
 from dash.exceptions import PreventUpdate
@@ -26,7 +19,7 @@ from sqlalchemy import create_engine, Table, Column, Integer, String, MetaData, 
 from sqlalchemy.orm import sessionmaker
 
 # Database connection details
-DATABASE_URL = "postgresql://qhbw_sql_user:EJyTGHeLljJ1TCXlLtWPYPtrGDDzOLpg@dpg-cqkb5dbqf0us73c6a0lg-a.oregon-postgres.render.com/qhbw_sql"
+DATABASE_URL = os.environ.get('DATABASE_URL', "postgresql://qhbw_sql_user:EJyTGHeLljJ1TCXlLtWPYPtrGDDzOLpg@dpg-cqkb5dbqf0us73c6a0lg-a.oregon-postgres.render.com/qhbw_sql")
 
 # Initialize SQLAlchemy engine
 engine = create_engine(DATABASE_URL)
@@ -39,6 +32,7 @@ server = app.server
 
 metadata = MetaData()
 
+# Define database tables
 processed_data = Table(
     'processed_data', metadata,
     Column('id', Integer, primary_key=True),
@@ -157,6 +151,7 @@ def parse_contents(contents, filename):
     except Exception as e:
         print(f"Error parsing file: {e}")
         return None, None
+
 # Function to store processed data into the database
 def store_processed_data(df, hole_id, stage):
     try:
@@ -193,6 +188,7 @@ def store_available_data(hole_id, stage):
     except Exception as e:
         session.rollback()
         print(f"Error storing available data: {e}")
+
 # Function to retrieve processed data from the database
 def retrieve_processed_data(hole_id, stage):
     try:
@@ -229,6 +225,7 @@ def retrieve_available_data():
     except Exception as e:
         print(f"Error retrieving available data: {e}")
         return []
+
 # Function to track mixes and marsh values
 def track_mixes_and_marsh_values(data):
     mix_counts = {'A': 0, 'B': 0, 'C': 0, 'D': 0}
@@ -296,6 +293,7 @@ def extract_notes(data):
     except Exception as e:
         print(f"Error extracting notes: {e}")
         return pd.DataFrame(columns=['Timestamp', 'Note'])
+
 # Function to generate interactive graph
 def generate_interactive_graph(data):
     try:
@@ -342,7 +340,7 @@ def generate_interactive_graph(data):
             title='Time Elapsed (Minutes)'
         )
 
-        fig.update_layout(
+      fig.update_layout(
             title='Flow Rate and Effective Pressure vs Time for Mixes',
             yaxis=dict(title='Flow Rate (L/min)', side='left'),
             yaxis2=dict(title='Effective Pressure (bar)', overlaying='y', side='right'),
@@ -389,6 +387,7 @@ def generate_histogram(data, column):
     except Exception as e:
         print(f"Error generating histogram: {e}")
         return None
+
 # Function to calculate cumulative zero flow
 def calculate_cumulative_zero_flow(data):
     try:
@@ -440,6 +439,7 @@ def calculate_grout_and_mix_volumes(data):
     except Exception as e:
         print(f"Error calculating grout and mix volumes: {e}")
         return 0, 0, 0, 0, 0
+
 # Function to update injection details
 def update_injection_details(data, selected_stage, selected_hole_id):
     try:
@@ -507,6 +507,7 @@ def update_notes_table(notes_data):
     except Exception as e:
         print(f"Error updating notes table: {e}")
         return "Error updating notes table"
+
 # Load and encode the Gecko logo
 encoded_logo = None
 try:
@@ -609,7 +610,7 @@ app.layout = html.Div([
                     'fontWeight': 'bold',
                     'textAlign': 'center'
                 },
-                style_cell={
+              style_cell={
                     'height': '40px',
                     'minWidth': '80px', 'width': '80px', 'maxWidth': '80px',
                     'whiteSpace': 'normal'
@@ -752,6 +753,7 @@ def update_and_run_tool(contents, n_clicks, hole_id, stage, order, view_type, fi
             return "", error_message, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, ""
 
     raise PreventUpdate
+
 # Callback for printing the report
 @app.callback(
     Output('print-report-button', 'n_clicks'),
