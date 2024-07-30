@@ -341,11 +341,11 @@ def generate_interactive_graph(data):
         )
 
       fig.update_layout(
-        title='Flow Rate and Effective Pressure vs Time for Mixes',
-        yaxis=dict(title='Flow Rate (L/min)', side='left'),
-        yaxis2=dict(title='Effective Pressure (bar)', overlaying='y', side='right'),
-        hovermode='x unified'
-    )
+            title='Flow Rate and Effective Pressure vs Time for Mixes',
+            yaxis=dict(title='Flow Rate (L/min)', side='left'),
+            yaxis2=dict(title='Effective Pressure (bar)', overlaying='y', side='right'),
+            hovermode='x unified'
+        )
 
         return fig, data, notes_data
     except Exception as e:
