@@ -334,18 +334,19 @@ def generate_interactive_graph(data):
             ))
 
         time_ticks = pd.date_range(start=start_time, end=data['TIMESTAMP'].max(), freq='15T')
-        fig.update_xaxes(
+           fig.update_xaxes(
             tickvals=[(t - start_time).total_seconds() / 60 for t in time_ticks],
             ticktext=[t.strftime('%H:%M') for t in time_ticks],
             title='Time Elapsed (Minutes)'
         )
 
-      fig.update_layout(
-            title='Flow Rate and Effective Pressure vs Time for Mixes',
-            yaxis=dict(title='Flow Rate (L/min)', side='left'),
-            yaxis2=dict(title='Effective Pressure (bar)', overlaying='y', side='right'),
-            hovermode='x unified'
-        )
+          fig.update_layout(
+        title='Flow Rate and Effective Pressure vs Time for Mixes',
+        yaxis=dict(title='Flow Rate (L/min)', side='left'),
+        yaxis2=dict(title='Effective Pressure (bar)', overlaying='y', side='right'),
+        hovermode='x unified'
+    )
+
 
         return fig, data, notes_data
     except Exception as e:
