@@ -13,23 +13,32 @@ import io
 import datetime as dt
 import os
 import time
+import json
+from functools import lru_cache
 
-# SQLAlchemy for database connection
-from sqlalchemy import create_engine, Table, Column, Integer, String, MetaData, Float, TIMESTAMP
+# SQLAlchemy imports
+from sqlalchemy import create_engine, Table, Column, Integer, String, MetaData, Float, TIMESTAMP, select, func, text
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import QueuePool
 
-# Database connection details
-DATABASE_URL = os.environ.get('DATABASE_URL', "postgresql://qhbw_sql_user:EJyTGHeLljJ1TCXlLtWPYPtrGDDzOLpg@dpg-cqkb5dbqf0us73c6a0lg-a.oregon-postgres.render.com/qhbw_sql")
+import logging
 
-# Initialize SQLAlchemy engine
-engine = create_engine(DATABASE_URL)
+logging.basicConfig(filename='app_errors.log', level=logging.ERROR, 
+                    format='%(asctime)s %(levelname)s: %(message)s')
+
+def log_error(message):
+    print(message)  # Print to console
+    logging.error(message)  # Log to file
+
+# Environment variables
+DATABASE_URL = os.environ.get('DATABASE_URL', 'postgresql://qhbw_sql_vx26_user:glwGtA9yoGUtBrow7YdM9Ps80xNkGQIL@dpg-cqli5h08fa8c73aurv40-a.oregon-postgres.render.com/qhbw_sql_vx26')
+
+# Initialize SQLAlchemy engine with connection pooling
+engine = create_engine(DATABASE_URL, poolclass=QueuePool, pool_size=10, max_overflow=20)
 Session = sessionmaker(bind=engine)
 session = Session()
 
-# Initialize Dash app
-app = Dash(__name__, suppress_callback_exceptions=True)
-server = app.server
-
+# Define metadata
 metadata = MetaData()
 
 # Define database tables
@@ -88,12 +97,47 @@ available_data = Table(
     Column('upload_date', TIMESTAMP)
 )
 
+# Create tables if they don't exist
 metadata.create_all(engine)
+
+def test_database_connection():
+    try:
+        with engine.connect() as connection:
+            result = connection.execute(text("SELECT 1"))
+            print("Database connection successful!")
+    except Exception as e:
+        print(f"Database connection failed: {e}")
+
+# Call this function at the start of your app
+test_database_connection()
+
+# Initialize Dash app
+app = Dash(__name__, suppress_callback_exceptions=True)
+server = app.server
+
+# Function to get unique values from the database
+def get_unique_values(table_name, column_name, hole_id=None):
+    try:
+        with engine.connect() as connection:
+            if column_name == 'hole_id':
+                query = text("SELECT DISTINCT hole_id FROM processed_data")
+                result = connection.execute(query)
+                return [row[0] for row in result]
+            elif column_name == 'stage':
+                if hole_id:
+                    query = text("SELECT DISTINCT stage FROM processed_data WHERE hole_id = :hole_id")
+                    result = connection.execute(query, {"hole_id": hole_id})
+                    return [row[0] for row in result]
+                else:
+                    return []
+    except Exception as e:
+        print(f"Error getting unique values: {e}")
+        return []
 
 # Function to extract file details
 def extract_file_details(file_name):
     try:
-        pattern = r'([PS]\d{4})_(S\d+)'
+        pattern = r'([PS]\d{4})_(S\d+(?:&\d+)?)'
         match = re.search(pattern, file_name)
         if match:
             hole_id, stage = match.groups()
@@ -167,17 +211,6 @@ def store_processed_data(df, hole_id, stage):
         session.rollback()
         print(f"Error storing processed data: {e}")
 
-# Function to store grouting summary into the database
-def store_grouting_summary(summary):
-    try:
-        insert_stmt = grouting_summary.insert().values(**summary)
-        session.execute(insert_stmt)
-        session.commit()
-        print(f"Grouting summary for {summary['hole_id']} {summary['stage']} stored successfully.")
-    except Exception as e:
-        session.rollback()
-        print(f"Error storing grouting summary: {e}")
-
 # Function to store available data into the database
 def store_available_data(hole_id, stage):
     try:
@@ -192,39 +225,22 @@ def store_available_data(hole_id, stage):
 # Function to retrieve processed data from the database
 def retrieve_processed_data(hole_id, stage):
     try:
-        select_stmt = processed_data.select().where(
-            (processed_data.c.hole_id == hole_id) & 
-            (processed_data.c.stage == stage)
-        )
-        result = session.execute(select_stmt).fetchall()
-        df = pd.DataFrame(result, columns=processed_data.columns.keys())
-        return df
+        with engine.connect() as connection:
+            query = text("""
+                SELECT * FROM processed_data 
+                WHERE hole_id = :hole_id AND stage = :stage
+                LIMIT 10000
+            """)
+            result = connection.execute(query, {"hole_id": hole_id, "stage": stage})
+            df = pd.DataFrame(result.fetchall())
+            if df.empty:
+                print(f"No data found for hole_id: {hole_id} and stage: {stage}")
+            else:
+                print(f"Retrieved {len(df)} rows for hole_id: {hole_id} and stage: {stage}")
+            return df
     except Exception as e:
         print(f"Error retrieving processed data: {e}")
         return None
-
-# Function to retrieve grouting summary from the database
-def retrieve_grouting_summary(hole_id, stage):
-    try:
-        select_stmt = grouting_summary.select().where(
-            (grouting_summary.c.hole_id == hole_id) & 
-            (grouting_summary.c.stage == stage)
-        )
-        result = session.execute(select_stmt).fetchone()
-        return dict(result) if result else None
-    except Exception as e:
-        print(f"Error retrieving grouting summary: {e}")
-        return None
-
-# Function to retrieve available data from the database
-def retrieve_available_data():
-    try:
-        select_stmt = available_data.select()
-        result = session.execute(select_stmt).fetchall()
-        return result
-    except Exception as e:
-        print(f"Error retrieving available data: {e}")
-        return []
 
 # Function to track mixes and marsh values
 def track_mixes_and_marsh_values(data):
@@ -351,7 +367,6 @@ def generate_interactive_graph(data):
     except Exception as e:
         print(f"Error generating interactive graph: {e}")
         return None, None, None
-
 
 # Helper function to add trace to figure
 def add_trace(fig, data, name, y_col, color, yaxis='y'):
@@ -530,18 +545,13 @@ app.layout = html.Div([
     html.Div([
         html.Div([
             html.Label('Hole ID'),
-            dcc.Input(id='hole-id-input', type='text', placeholder="Click here to enter Hole ID")
-        ], style={'width': '30%', 'display': 'inline-block', 'marginRight': '2%'}),
+            dcc.Dropdown(id='hole-id-dropdown', placeholder="Select Hole ID")
+        ], style={'width': '45%', 'display': 'inline-block', 'marginRight': '10%'}),
         
         html.Div([
             html.Label('Stage'),
-            dcc.Input(id='stage-input', type='text', placeholder="Click here to enter Stage")
-        ], style={'width': '30%', 'display': 'inline-block', 'marginRight': '2%'}),
-        
-        html.Div([
-            html.Label('Order'),
-            dcc.Dropdown(id='order-dropdown', placeholder="Select an Order")
-        ], style={'width': '30%', 'display': 'inline-block'}),
+            dcc.Dropdown(id='stage-dropdown', placeholder="Select Stage")
+        ], style={'width': '45%', 'display': 'inline-block'}),
     ], style={'marginBottom': '20px'}),
     
     html.Div([
@@ -579,7 +589,9 @@ app.layout = html.Div([
     html.Div(id='upload-confirmation', style={'marginTop': 10, 'color': 'green'}),
     html.Div(id='error-message', style={'marginTop': 10, 'color': 'red'}),
     
-    html.Button('Run Tool', id='run-tool-button', n_clicks=0, style={'marginTop': 20, 'marginBottom': 20}),
+    html.Button('Run Tool', id='run-tool-button-1', n_clicks=0, style={'marginTop': 20, 'marginBottom': 20}),
+    html.Button('Load Data', id='load-data-button', n_clicks=0, style={'marginTop': 20, 'marginBottom': 20, 'marginLeft': 10}),
+    html.Button('Upload to Database', id='upload-db-button', n_clicks=0, style={'marginTop': 20, 'marginBottom': 20, 'marginLeft': 10}),
     
     dcc.Loading(
         id="loading",
@@ -611,7 +623,7 @@ app.layout = html.Div([
                     'fontWeight': 'bold',
                     'textAlign': 'center'
                 },
-              style_cell={
+                style_cell={
                     'height': '40px',
                     'minWidth': '80px', 'width': '80px', 'maxWidth': '80px',
                     'whiteSpace': 'normal'
@@ -640,22 +652,17 @@ app.layout = html.Div([
     html.Button('Print Report', id='print-report-button', n_clicks=0, style={'marginTop': 20}),
 ])
 
-# Callback to update dropdowns based on uploaded file
+# Callback to populate dropdowns
 @app.callback(
-    [Output('hole-id-input', 'value'),
-     Output('stage-input', 'value'),
-     Output('order-dropdown', 'options')],
-    [Input('upload-data', 'filename')]
+    [Output('hole-id-dropdown', 'options'),
+     Output('stage-dropdown', 'options')],
+    [Input('hole-id-dropdown', 'value')]
 )
-def update_dropdowns(filename):
-    if filename is None:
-        return "", "", []
+def update_dropdowns(selected_hole_id):
+    hole_ids = get_unique_values('processed_data', 'hole_id')
+    stages = get_unique_values('processed_data', 'stage', selected_hole_id) if selected_hole_id else []
     
-    hole_id, stage, order = extract_file_details(filename)
-    
-    order_options = [{'label': order, 'value': order}] if order else []
-    
-    return hole_id or "", stage or "", order_options
+    return [{'label': id, 'value': id} for id in hole_ids], [{'label': stage, 'value': stage} for stage in stages]
 
 # Callback to display clicked point data
 @app.callback(
@@ -687,60 +694,29 @@ def display_click_data(clickData):
      Output('giv-operator-notes', 'children'),
      Output('processing-message', 'children')],
     [Input('upload-data', 'contents'),
-     Input('run-tool-button', 'n_clicks'),
-     Input('hole-id-input', 'value'),
-     Input('stage-input', 'value'),
-     Input('order-dropdown', 'value'),
+     Input('run-tool-button-1', 'n_clicks'),
+     Input('load-data-button', 'n_clicks'),
+     Input('hole-id-dropdown', 'value'),
+     Input('stage-dropdown', 'value'),
      Input('view-type', 'value')],
     [State('upload-data', 'filename')]
 )
-def update_and_run_tool(contents, n_clicks, hole_id, stage, order, view_type, filename):
+def update_and_run_tool(contents, run_clicks, load_clicks, hole_id, stage, view_type, filename):
     ctx = dash.callback_context
     trigger_id = ctx.triggered[0]['prop_id'].split('.')[0]
 
-    if trigger_id == 'upload-data' and contents is not None:
-        processing_message = "Hold on! Gecko is on it. Processing your data now! 🦎"
-        return "", "", dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, processing_message
-
-    elif trigger_id in ['run-tool-button', 'hole-id-input', 'stage-input', 'order-dropdown', 'view-type']:
-        if contents is None:
-            return "", "Error: No file uploaded. Please upload a file before running the tool.", dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, ""
-        
+    if trigger_id == 'upload-data' and contents:
         try:
-            processing_message = "Hold on! Gecko is on it. Processing your data now! 🦎"
-            
-            # Simulate some processing time
-            time.sleep(2)
-            
             df, mixes_and_marsh = parse_contents(contents, filename)
             if df is None:
                 raise ValueError("Error parsing file contents")
 
-            if view_type == 'time_series':
-                fig, data, notes_data = generate_interactive_graph(df)
-            elif view_type == 'scatter':
-                fig = generate_scatter_plot(df)
-                data, notes_data = df, pd.DataFrame()
-            elif view_type == 'histogram':
-                fig = generate_histogram(df, 'flow')
-                data, notes_data = df, pd.DataFrame()
-            else:
-                raise ValueError("Unsupported view type")
-
-            if data is None:
-                raise ValueError("Error generating graph")
-
-            injection_details = update_injection_details(data, stage, hole_id)
-
+            fig, data, notes_data = generate_interactive_graph(df)
+            injection_details = update_injection_details(df, stage, hole_id)
             mix_summary = html.Div([
-                html.P(f"Mix A: {mixes_and_marsh['Mix A']} times"),
-                html.P(f"Mix B: {mixes_and_marsh['Mix B']} times"),
-                html.P(f"Mix C: {mixes_and_marsh['Mix C']} times"),
-                html.P(f"Mix D: {mixes_and_marsh['Mix D']} times"),
+                html.P(f"Mix {mix}: {count} times") for mix, count in mixes_and_marsh.items() if mix != 'Errors'
             ])
-
             error_summary = html.Div([html.Span(error, style={'color': 'red'}) for error in mixes_and_marsh['Errors']] or "NA")
-
             giv_operator_notes = html.Div([
                 html.H3("GIV Operator Notes:"),
                 html.Pre(update_notes_table(notes_data))
@@ -753,7 +729,64 @@ def update_and_run_tool(contents, n_clicks, hole_id, stage, order, view_type, fi
             print(error_message)
             return "", error_message, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, ""
 
+    elif trigger_id == 'load-data-button' and hole_id and stage:
+        try:
+            print(f"Attempting to load data for hole_id: {hole_id}, stage: {stage}")
+            data = retrieve_processed_data(hole_id, stage)
+            if data is None or data.empty:
+                error_message = f"No data found for Hole ID: {hole_id} and Stage: {stage}"
+                print(error_message)
+                return "", error_message, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, ""
+            
+            print(f"Data retrieved successfully. Shape: {data.shape}")
+            mixes_and_marsh = track_mixes_and_marsh_values(data)
+            
+            if view_type == 'time_series':
+                fig, _, notes_data = generate_interactive_graph(data)
+            elif view_type == 'scatter':
+                fig = generate_scatter_plot(data)
+            elif view_type == 'histogram':
+                fig = generate_histogram(data, 'flow')  # You can change 'flow' to any other column
+            else:
+                fig = go.Figure()  # Empty figure if view type is not recognized
+            
+            injection_details = update_injection_details(data, stage, hole_id)
+            mix_summary = html.Div([
+                html.P(f"Mix {mix}: {count} times") for mix, count in mixes_and_marsh.items() if mix != 'Errors'
+            ])
+            error_summary = html.Div([html.Span(error, style={'color': 'red'}) for error in mixes_and_marsh['Errors']] or "NA")
+            giv_operator_notes = html.Div([
+                html.H3("GIV Operator Notes:"),
+                html.Pre(update_notes_table(notes_data))
+            ])
+
+            return f"Data for {hole_id} {stage} loaded successfully", "", fig, injection_details, mix_summary, error_summary, giv_operator_notes, ""
+        except Exception as e:
+            error_message = f"Error loading data: {str(e)}"
+            print(error_message)
+            return "", error_message, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, ""
+
     raise PreventUpdate
+
+# Callback for uploading data to the database
+@app.callback(
+    Output('upload-db-button', 'children'),
+    [Input('upload-db-button', 'n_clicks')],
+    [State('upload-data', 'contents'),
+     State('upload-data', 'filename')]
+)
+def upload_to_database(n_clicks, contents, filename):
+    if n_clicks > 0 and contents:
+        try:
+            df, _ = parse_contents(contents, filename)
+            hole_id, stage, _ = extract_file_details(filename)
+            store_processed_data(df, hole_id, stage)
+            store_available_data(hole_id, stage)
+            return f"Data uploaded for {hole_id} {stage}"
+        except Exception as e:
+            print(f"Error uploading to database: {e}")
+            return "Error uploading data"
+    return "Upload to Database"
 
 # Callback for printing the report
 @app.callback(
@@ -869,6 +902,5 @@ def print_report(n_clicks, figure, injection_details, mix_summary, error_summary
 
     return 0
 
-# Run the server
 if __name__ == '__main__':
     app.run_server(debug=False)
